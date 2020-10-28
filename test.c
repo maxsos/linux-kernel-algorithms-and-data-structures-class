@@ -14,7 +14,7 @@ MODULE_LICENSE("GPL");
 #define DUMMY_NUM_MINORS 1
 #define DUMMY_MODULE_NAME "dummy"
 
-DEFINE_MUTEX(my_mutex);
+// DEFINE_MUTEX(my_mutex);
 	
 struct node {
 	struct node* next;
@@ -33,15 +33,15 @@ static struct dummy_device_data dummy_device_data[DUMMY_NUM_MINORS];
 
 static int dummy_open(struct inode *inode, struct file *file) {
 	printk("%s: opened.\n", DUMMY_MODULE_NAME);
-	mutex_init(&my_mutex);
+	// mutex_init(&my_mutex);
 	
-	mutex_lock(&my_mutex);
+	// mutex_lock(&my_mutex);
 	return 0;
 }
 
 static int dummy_release(struct inode *inode, struct file *file) {
 	printk("%s: closed.\n", DUMMY_MODULE_NAME);
-	mutex_unlock(&my_mutex);
+	// mutex_unlock(&my_mutex);
 	return 0;
 }
 
