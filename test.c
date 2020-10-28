@@ -14,7 +14,7 @@ MODULE_LICENSE("GPL");
 #define DUMMY_NUM_MINORS 1
 #define DUMMY_MODULE_NAME "dummy"
 
-// DEFINE_MUTEX(my_mutex);
+DEFINE_MUTEX(my_mutex);
 	
 struct node {
 	struct node* next;
@@ -30,56 +30,80 @@ struct dummy_device_data {
 };
 
 static struct dummy_device_data dummy_device_data[DUMMY_NUM_MINORS];
+static int dummy_check_if_opened_before[100];
 
 static int dummy_open(struct inode *inode, struct file *file) {
 	printk("%s: opened.\n", DUMMY_MODULE_NAME);
-	// mutex_init(&my_mutex);
-	
-	// mutex_lock(&my_mutex);
 	return 0;
 }
 
 static int dummy_release(struct inode *inode, struct file *file) {
 	printk("%s: closed.\n", DUMMY_MODULE_NAME);
-	// mutex_unlock(&my_mutex);
 	return 0;
 }
 
 static ssize_t dummy_read(struct file *file, char __user *user_buffer,
 			  size_t size, loff_t * offset) {
+	mutex_lock(&my_mutex);
+	ssize_t error = 0;
+	int i;
+	for(i = 0; i < 100; ++i) 
+		if (dummy_check_if_opened_before[i] == current->pid) {
+			dummy_check_if_opened_before[i] = 0;
+			goto read_out_err;
+		}
+
     struct dummy_device_data *ddd = &dummy_device_data[0];
 	struct node *n = ddd->node;	
+	
 	if(dummy_device_data[0].is_read) {
 		dummy_device_data[0].is_read = false;
-		return 0;
+		goto read_out_err;
 	}
+
 	if(n == NULL) {
 		printk("NODE IS NULL:((\n");
-		return 0;
+		goto read_out_err;
 	}
     struct node *next = n->next;
 
 	if(!n->line || !n->len) {
 		printk("LINE IS NULL:((\n");
-		return 0;
+		goto read_out_err;
 	}
 
 	printk("READ %zu//%zu \n", size, dummy_device_data[0].node->len);
 	size_t len = n->len;
 	
-    if (copy_to_user(user_buffer, n->line, len))
-        return -EFAULT;
-
+    if (copy_to_user(user_buffer, n->line, len)) {
+		error = -EFAULT;
+		goto read_out_err;
+	}
+        
     vfree(n->line);
 	vfree(n);
     dummy_device_data[0].node = next;
 	dummy_device_data[0].is_read = true;
+	mutex_unlock(&my_mutex);
+
+	for(i = 0; i < 100; ++i)
+		if (dummy_check_if_opened_before[i] != 0) {
+			dummy_check_if_opened_before[i] = current->pid;
+			break;
+		}
+
 	return len;
+
+read_out_err:
+	mutex_unlock(&my_mutex);
+	return error;
 }
 
 static ssize_t dummy_write(struct file *file, const char __user *user_buffer,
 			   size_t size, loff_t * offset) {
-	printk("Write\n");
+	mutex_lock(&my_mutex);
+	ssize_t error = 0;
+	// printk("Write\n");
  	struct dummy_device_data *ddd = &dummy_device_data[0];
 	struct node *n = ddd->node;
 	
@@ -96,12 +120,11 @@ static ssize_t dummy_write(struct file *file, const char __user *user_buffer,
 		n = n->next;
 	}
 
-	
-
 	if (!n) {
 		pr_err("%s: vmalloc failed: can't alloc memory for node. \n",
 				__FUNCTION__, size); 
-        return -1;
+        error = -ENOMEM;
+		goto write_out_err;
 	}
 	
 	n->line = vmalloc(size * sizeof(char));
@@ -109,18 +132,27 @@ static ssize_t dummy_write(struct file *file, const char __user *user_buffer,
     if (!n->line) {
 		pr_err("%s: vmalloc failed: can't alloc memory for line %zu size. \n",
 				__FUNCTION__, size); 
-        return -1;
+		error = -ENOMEM;
+		goto write_out_err;
     }
 	
-    if (copy_from_user(n->line, user_buffer, size))
-        return -EFAULT;
+    if (copy_from_user(n->line, user_buffer, size)) {
+		error = -EFAULT;
+		goto write_out_err;
+	}
 	
     n->len = size;
 	n->next = NULL;
-	printk("Address: %p\t%p\n", dummy_device_data[0].node, n);
+	// printk("Address: %p\t%p\n", dummy_device_data[0].node, n);
 	printk("WRITEN: line=%s, len=%zu, size=%zu\n", 
 				n->line, n->len, size);
+
+	mutex_unlock(&my_mutex);
 	return size;
+
+write_out_err:
+	mutex_unlock(&my_mutex);
+	return error;
 }
 
 static struct file_operations dummy_fops = {
@@ -198,6 +230,9 @@ static int dummy_init(void)
 			 __FUNCTION__, error);
 		return error;
 	}
+	mutex_init(&my_mutex);
+	for(i = 0; i < 100; ++i)
+		dummy_check_if_opened_before[i] = 0;
 
     return 0;
 }
@@ -221,6 +256,8 @@ static void dummy_exit(void)
 
 	unregister_chrdev_region(dummy_device_data[0].dev,
 				 DUMMY_NUM_MINORS);
+
+	mutex_destroy(&my_mutex);
 
 	printk("%s: Bye\n", __FUNCTION__);
 }
